@@ -164,6 +164,9 @@ on:
         required: true
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM == 'true' && ' [LSM]' || '' }}${{ github.event.inputs.SCHED == 'true' && ' [SCHED]' || '' }}${{ github.event.inputs.ZRAM == 'true' && ' [ZRAM]' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
@@ -501,7 +504,7 @@ jobs:
                   echo "使用官方脚本编译且当使用 build_with_bazel 时，可能受特殊符号数量限制，编译失败请修改"
                   echo "When using the official script and building with build_with_bazel, the build may fail due to a limit on the number of special characters. Please modify the configuration if that happens."
                 fi
-                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
+                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\${res} | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
               fi
             else
               echo "Unknown format, appending echo manually"
@@ -1226,6 +1229,66 @@ jobs:
         with:
           name: ZRAM-Module_${{ env.KERNEL_VERSION }}_${{ steps.extract_info.outputs.value }}
           path: ZRAM-Module/*
+
+      - name: Package AnyKernel3 for Release
+        run: |
+          set -e
+          RELEASE_BASENAME="AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.TKERNEL_VERSION }})${{ steps.suffix.outputs.value }}"
+          echo "RELEASE_BASENAME=$RELEASE_BASENAME" >> $GITHUB_ENV
+          cd AnyKernel3
+          zip -r "../${RELEASE_BASENAME}.zip" .
+
+      - name: Build Release Notes
+        run: |
+          set -e
+          format_bool() {
+            if [[ "$1" == "true" ]]; then
+              echo "True"
+            else
+              echo "False"
+            fi
+          }
+          {
+            echo "# SukiSU Ultra Kernel Release"
+            echo
+            echo "- Kernel Version: ${{ env.TKERNEL_VERSION }}"
+            echo "- Android Version: ${{ env.ANDROID_VERSION }}"
+            echo "- KSU API Version: ${{ env.KSU_API_VERSION }}"
+            echo "- Build Time: ${{ env.KBUILD_BUILD_TIMESTAMP }}"
+            echo "- Workflow: ${{ github.workflow }}"
+            echo "- Run: ${{ github.run_id }}"
+            echo
+            echo "## Build Configuration"
+            echo "- 配置文件: ${{ github.event.inputs.FILE }}"
+            echo "- 管理器调用方向: ${{ github.event.inputs.MANAGER_SOURCE }}"
+            echo "- SUSFS模块下载调用方向: ${{ github.event.inputs.SUSFS_CI }}"
+            echo "- 内核模块实现方式: ${{ github.event.inputs.KPM }}"
+            echo "- 回退SUSFS到指定哈希版本: ${{ github.event.inputs.SUSFS_META }}"
+            echo "- 动态清单仓库所有者: ${{ github.event.inputs.DYNAMIC_REPO }}"
+            echo "- 自定义构建时间(输入F使用当前UTC时间): ${{ github.event.inputs.BUILD_TIME }}"
+            echo "- 分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改): ${{ github.event.inputs.KSU_META }}"
+            echo "- 自定义内核后缀(不输入使用随机字符串): ${{ github.event.inputs.SUFFIX }}"
+            echo "- 自定义内核等级欺骗(SUBLEVEL): ${{ github.event.inputs.SUBLEVEL }}"
+            echo "- 是否启用极速构建？ $(format_bool \"${{ github.event.inputs.FAST_BUILD }}\")"
+            echo "- 是否启用关键分区写入保护模块(BBG)？ $(format_bool \"${{ github.event.inputs.LSM }}\")"
+            echo "- 是否启用网络功能拓展(NETFILTER)？ $(format_bool \"${{ github.event.inputs.NETFILTER }}\")"
+            echo "- 是否启用网络优化算法(BBR+ECN)？ $(format_bool \"${{ github.event.inputs.BBR_ECN }}\")"
+            echo "- 是否添加Unicode不可见字码点绕过读取漏洞修复？ $(format_bool \"${{ github.event.inputs.UNICODE_BYPASS }}\")"
+            echo "- 是否添加风驰驱动1.0？ $(format_bool \"${{ github.event.inputs.SCHED }}\")"
+            echo "- 是否添加更多ZRAM算法？ $(format_bool \"${{ github.event.inputs.ZRAM }}\")"
+            echo "- 是否阻止5US报错文件产生？ $(format_bool \"${{ github.event.inputs.XUS_FIX }}\")"
+            echo "- 是否拉取SUSFS-DEV分支？ $(format_bool \"${{ github.event.inputs.SUSFS_DEV }}\")"
+            echo "- 是否停用空间清扫？ $(format_bool \"${{ github.event.inputs.SPACE_NOCLEAN }}\")"
+            echo "- 是否停用此次Ccache？ $(format_bool \"${{ github.event.inputs.BUILD_NOCCACHE }}\")"
+          } > release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ env.TKERNEL_VERSION }}-${{ github.run_id }}"
+          name: "SukiSU Ultra ${{ env.TKERNEL_VERSION }} (${{ steps.extract_info.outputs.value }})"
+          body_path: release_notes.md
+          files: "${{ env.RELEASE_BASENAME }}.zip"
 
       - name: Post-build Disk Check
         run: df -h
