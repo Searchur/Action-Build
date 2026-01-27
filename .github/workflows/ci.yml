@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - SukiSU-Ultra
+  pull_request:
+    branches:
+      - SukiSU-Ultra
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate workflow files
+        run: |
+          echo "✅ Validating workflow YAML files..."
+          for file in .github/workflows/*.yml; do
+            if [ -f "$file" ]; then
+              echo "Checking $file"
+              # Basic YAML syntax check
+              python3 -c "import yaml; yaml.safe_load(open('$file'))" && echo "✅ $file is valid" || exit 1
+            fi
+          done
+          echo "✅ All workflow files are valid!"
+
+      - name: Success
+        run: echo "✅ CI checks passed!"
