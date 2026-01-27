@@ -164,6 +164,9 @@ on:
         required: true
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM == 'true' && ' [LSM]' || '' }}${{ github.event.inputs.SCHED == 'true' && ' [SCHED]' || '' }}${{ github.event.inputs.ZRAM == 'true' && ' [ZRAM]' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
@@ -501,7 +504,7 @@ jobs:
                   echo "使用官方脚本编译且当使用 build_with_bazel 时，可能受特殊符号数量限制，编译失败请修改"
                   echo "When using the official script and building with build_with_bazel, the build may fail due to a limit on the number of special characters. Please modify the configuration if that happens."
                 fi
-                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
+                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\${res} | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
               fi
             else
               echo "Unknown format, appending echo manually"
@@ -1226,6 +1229,56 @@ jobs:
         with:
           name: ZRAM-Module_${{ env.KERNEL_VERSION }}_${{ steps.extract_info.outputs.value }}
           path: ZRAM-Module/*
+
+      - name: Package AnyKernel3 for Release
+        run: |
+          set -e
+          RELEASE_BASENAME="AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.TKERNEL_VERSION }})${{ steps.suffix.outputs.value }}"
+          echo "RELEASE_BASENAME=$RELEASE_BASENAME" >> $GITHUB_ENV
+          cd AnyKernel3
+          zip -r "../${RELEASE_BASENAME}.zip" .
+
+      - name: Build Release Notes
+        run: |
+          set -e
+          {
+            echo "# SukiSU Ultra Kernel Release"
+            echo
+            echo "- Kernel Version: ${{ env.TKERNEL_VERSION }}"
+            echo "- Build Time: ${{ env.KBUILD_BUILD_TIMESTAMP }}"
+            echo "- Workflow: ${{ github.workflow }}"
+            echo "- Run: ${{ github.run_id }}"
+            echo
+            echo "## Workflow Inputs"
+            echo "- 配置文件 (FILE): ${{ github.event.inputs.FILE }}"
+            echo "- 管理器调用方向 (MANAGER_SOURCE): ${{ github.event.inputs.MANAGER_SOURCE }}"
+            echo "- SUSFS模块下载调用方向 (SUSFS_CI): ${{ github.event.inputs.SUSFS_CI }}"
+            echo "- 内核模块实现方式 (KPM): ${{ github.event.inputs.KPM }}"
+            echo "- SUSFS 版本 (SUSFS_META): ${{ github.event.inputs.SUSFS_META }}"
+            echo "- KSU 版本 (KSU_META): ${{ github.event.inputs.KSU_META }}"
+            echo "- 自定义构建时间 (BUILD_TIME): ${{ github.event.inputs.BUILD_TIME }}"
+            echo "- 自定义后缀 (SUFFIX): ${{ github.event.inputs.SUFFIX }}"
+            echo "- LSM: ${{ github.event.inputs.LSM }}"
+            echo "- NETFILTER: ${{ github.event.inputs.NETFILTER }}"
+            echo "- BBR_ECN: ${{ github.event.inputs.BBR_ECN }}"
+            echo "- SUSFS_DEV: ${{ github.event.inputs.SUSFS_DEV }}"
+            echo "- FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"
+            echo "- SCHED: ${{ github.event.inputs.SCHED }}"
+            echo "- ZRAM: ${{ github.event.inputs.ZRAM }}"
+            echo "- UNICODE_BYPASS: ${{ github.event.inputs.UNICODE_BYPASS }}"
+            echo "- XUS_FIX: ${{ github.event.inputs.XUS_FIX }}"
+            echo "- 动态清单仓库 (DYNAMIC_REPO): ${{ github.event.inputs.DYNAMIC_REPO }}"
+            echo "- 停用空间清扫 (SPACE_NOCLEAN): ${{ github.event.inputs.SPACE_NOCLEAN }}"
+            echo "- 停用Ccache (BUILD_NOCCACHE): ${{ github.event.inputs.BUILD_NOCCACHE }}"
+          } > release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ env.TKERNEL_VERSION }}-${{ github.run_id }}"
+          name: "SukiSU Ultra ${{ env.TKERNEL_VERSION }} (${{ steps.extract_info.outputs.value }})"
+          body_path: release_notes.md
+          files: "${{ env.RELEASE_BASENAME }}.zip"
 
       - name: Post-build Disk Check
         run: df -h
