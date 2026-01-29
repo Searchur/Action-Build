@@ -164,6 +164,9 @@ on:
         required: true
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ github.event.inputs.FAST_BUILD == 'true' && ' [FAST]' || '' }}${{ github.event.inputs.KPM == 'KPM' && ' [KPM]' || github.event.inputs.KPM == 'KPN' && ' [KPN]' || '' }}${{ github.event.inputs.LSM == 'true' && ' [LSM]' || '' }}${{ github.event.inputs.SCHED == 'true' && ' [SCHED]' || '' }}${{ github.event.inputs.ZRAM == 'true' && ' [ZRAM]' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
@@ -450,6 +453,8 @@ jobs:
 
           # 读取修改后的版本
           NEW_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
+          ACTUAL_SUBLEVEL=$(awk '/^SUBLEVEL =/ {print $3}' ./common/Makefile)
+          echo "ACTUAL_SUBLEVEL=$ACTUAL_SUBLEVEL" >> $GITHUB_ENV
 
           if [ "$ORIG_VERSION" != "$NEW_VERSION" ]; then
             echo "Kernel Version:$ORIG_VERSION->$NEW_VERSION"
@@ -470,6 +475,7 @@ jobs:
         run: |
           cd kernel_workspace
           SUFFIX="${{ github.event.inputs.SUFFIX }}"
+          echo "ACTUAL_SUFFIX=$SUFFIX" >> $GITHUB_ENV
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
           FAST_BUILD="${{ github.event.inputs.FAST_BUILD }}"
 
@@ -526,6 +532,7 @@ jobs:
           RANDOM_DIGIT=$(od -An -N1 -tu1 < /dev/urandom | tr -d '[:space:]' | awk '{print $1 % 11}')
           RANDOM_HASH=$(od -An -N7 -tx1 /dev/urandom | tr -d ' \n')
           RANDOM_SUFFIX="${RANDOM_DIGIT}-o-g${RANDOM_HASH}"
+          echo "ACTUAL_SUFFIX=$RANDOM_SUFFIX" >> $GITHUB_ENV
 
           for path in \
             kernel_platform/common/scripts/setlocalversion \
@@ -614,6 +621,7 @@ jobs:
           else
             VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
           fi
+          echo "VERSION_FULL=$VERSION_FULL" >> $GITHUB_ENV
 
           # 清理并写入 Kbuild 版本信息
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
@@ -654,6 +662,8 @@ jobs:
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
             cd susfs4ksu
             [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "SUSFS_META 为空，使用最新上游 SUSFS"
+            ACTUAL_SUSFS_HASH=$(git rev-parse --short HEAD)
+            echo "ACTUAL_SUSFS_HASH=$ACTUAL_SUSFS_HASH" >> $GITHUB_ENV
             cd ..
           fi
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
@@ -1226,6 +1236,101 @@ jobs:
         with:
           name: ZRAM-Module_${{ env.KERNEL_VERSION }}_${{ steps.extract_info.outputs.value }}
           path: ZRAM-Module/*
+
+      - name: Package AnyKernel3 for Release
+        run: |
+          set -e
+          RELEASE_BASENAME="AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.TKERNEL_VERSION }})${{ steps.suffix.outputs.value }}"
+          echo "RELEASE_BASENAME=$RELEASE_BASENAME" >> $GITHUB_ENV
+          
+          # 从构建的内核中提取完整版本字符串
+          if [ -f "AnyKernel3/Image" ]; then
+            FULL_KERNEL_VERSION=$(strings AnyKernel3/Image | grep -m1 "Linux version" | sed 's/Linux version //' | awk '{print $1}')
+            echo "FULL_KERNEL_VERSION=$FULL_KERNEL_VERSION" >> $GITHUB_ENV
+          else
+            echo "FULL_KERNEL_VERSION=Unknown" >> $GITHUB_ENV
+          fi
+          
+          cd AnyKernel3
+          zip -r "../${RELEASE_BASENAME}.zip" .
+
+      - name: Build Release Notes
+        run: |
+          set -e
+          format_bool() {
+            if [[ "$1" == "true" ]]; then
+              echo "True"
+            else
+              echo "False"
+            fi
+          }
+          
+          # Determine actual SUFFIX value
+          if [[ -n "${{ github.event.inputs.SUFFIX }}" ]]; then
+            DISPLAY_SUFFIX="${{ github.event.inputs.SUFFIX }}"
+          else
+            DISPLAY_SUFFIX="${{ env.ACTUAL_SUFFIX }}"
+          fi
+          
+          # Determine actual SUBLEVEL value
+          if [[ -n "${{ github.event.inputs.SUBLEVEL }}" ]]; then
+            DISPLAY_SUBLEVEL="${{ github.event.inputs.SUBLEVEL }}"
+          else
+            DISPLAY_SUBLEVEL="${{ env.ACTUAL_SUBLEVEL }}"
+          fi
+          
+          # Determine actual SUSFS hash value
+          if [[ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]]; then
+            if [[ -n "${{ github.event.inputs.SUSFS_META }}" ]]; then
+              DISPLAY_SUSFS="${{ github.event.inputs.SUSFS_META }}"
+            else
+              DISPLAY_SUSFS="${{ env.ACTUAL_SUSFS_HASH }}"
+            fi
+          else
+            DISPLAY_SUSFS="未启用"
+          fi
+          
+          {
+            echo "# SukiSU Ultra Kernel Release"
+            echo
+            echo "- **SukiSU Ultra Version**: ${{ env.VERSION_FULL }}"
+            echo "- **Android Version**: ${{ env.ANDROID_VERSION }}"
+            echo "- **Android API**: ${{ env.ANDROID_SHORT_VERSION }}"
+            echo "- **内核版本**: ${{ env.FULL_KERNEL_VERSION }}"
+            echo "- **Build Time**: ${{ env.KBUILD_BUILD_TIMESTAMP }}"
+            echo
+            echo "## Build Configuration"
+            echo "- **Workflow**: ${{ github.workflow }}"
+            echo "- 配置文件: ${{ github.event.inputs.FILE }}"
+            echo "- 管理器调用方向: ${{ github.event.inputs.MANAGER_SOURCE }}"
+            echo "- SUSFS模块下载调用方向: ${{ github.event.inputs.SUSFS_CI }}"
+            echo "- 内核模块实现方式: ${{ github.event.inputs.KPM }}"
+            echo "- 回退SUSFS到指定哈希版本: $DISPLAY_SUSFS"
+            echo "- 动态清单仓库所有者: ${{ github.event.inputs.DYNAMIC_REPO }}"
+            echo "- 自定义构建时间(输入F使用当前UTC时间): ${{ github.event.inputs.BUILD_TIME }}"
+            echo "- 分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改): ${{ github.event.inputs.KSU_META }}"
+            echo "- 自定义内核后缀(不输入使用随机字符串): $DISPLAY_SUFFIX"
+            echo "- 自定义内核等级欺骗(SUBLEVEL): $DISPLAY_SUBLEVEL"
+            echo "- 是否启用极速构建？ $(format_bool \"${{ github.event.inputs.FAST_BUILD }}\")"
+            echo "- 是否启用关键分区写入保护模块(BBG)？ $(format_bool \"${{ github.event.inputs.LSM }}\")"
+            echo "- 是否启用网络功能拓展(NETFILTER)？ $(format_bool \"${{ github.event.inputs.NETFILTER }}\")"
+            echo "- 是否启用网络优化算法(BBR+ECN)？ $(format_bool \"${{ github.event.inputs.BBR_ECN }}\")"
+            echo "- 是否添加Unicode不可见字码点绕过读取漏洞修复？ $(format_bool \"${{ github.event.inputs.UNICODE_BYPASS }}\")"
+            echo "- 是否添加风驰驱动1.0？ $(format_bool \"${{ github.event.inputs.SCHED }}\")"
+            echo "- 是否添加更多ZRAM算法？ $(format_bool \"${{ github.event.inputs.ZRAM }}\")"
+            echo "- 是否阻止5US报错文件产生？ $(format_bool \"${{ github.event.inputs.XUS_FIX }}\")"
+            echo "- 是否拉取SUSFS-DEV分支？ $(format_bool \"${{ github.event.inputs.SUSFS_DEV }}\")"
+            echo "- 是否停用空间清扫？ $(format_bool \"${{ github.event.inputs.SPACE_NOCLEAN }}\")"
+            echo "- 是否停用此次Ccache？ $(format_bool \"${{ github.event.inputs.BUILD_NOCCACHE }}\")"
+          } > release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ env.TKERNEL_VERSION }}-${{ github.run_id }}"
+          name: "SukiSU Ultra ${{ env.TKERNEL_VERSION }} (${{ steps.extract_info.outputs.value }})"
+          body_path: release_notes.md
+          files: "${{ env.RELEASE_BASENAME }}.zip"
 
       - name: Post-build Disk Check
         run: df -h
